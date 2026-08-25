@@ -72,7 +72,7 @@ const AP_Param::Info Plane::var_info[] = {
 
     // @Param: ALT_SLOPE_MIN
     // @DisplayName: Altitude slope minimum
-    // @Description: This controls the minimum altitude change for a waypoint before an altitude slope will be used instead of an immediate altitude change. The default value is 15 meters, which helps to smooth out waypoint missions where small altitude changes happen near waypoints. If you don't want altitude slopes to be used in missions then you can set this to zero, which will disable altitude slope calculations. Otherwise you can set it to a minimum number of meters of altitude error to the destination waypoint before an altitude slope will be used to change altitude.
+    // @Description: This controls the minimum altitude change for a waypoint before an altitude slope will be used instead of an immediate altitude change. The default value is 15 meters, which helps to smooth out waypoint missions where small altitude changes happen near waypoints. If you don't want altitude slopes to be used in missions then you can set this to zero, which will disable altitude slope calculations. Otherwise you can set it to a minimum number of meters of altitude error to the destination waypoint before an altitude slope will be used to change altitude. This also gates the gradual altitude ramp used during the approach leg of QRTL.
     // @Range: 0 1000
     // @Increment: 1
     // @Units: m
@@ -477,37 +477,37 @@ const AP_Param::Info Plane::var_info[] = {
     // @Description: Flight mode for switch position 1 (910 to 1230 and above 2049)
     // @Values: 0:Manual,1:CIRCLE,2:STABILIZE,3:TRAINING,4:ACRO,5:FBWA,6:FBWB,7:CRUISE,8:AUTOTUNE,10:Auto,11:RTL,12:Loiter,13:TAKEOFF,14:AVOID_ADSB,15:Guided,17:QSTABILIZE,18:QHOVER,19:QLOITER,20:QLAND,21:QRTL,22:QAUTOTUNE,23:QACRO,24:THERMAL,25:Loiter to QLand,26:AUTOLAND
     // @User: Standard
-    GSCALAR(flight_mode1,           "FLTMODE1",       FLIGHT_MODE_1),
+    GARRAY(flight_modes, 0,         "FLTMODE1",       FLIGHT_MODE_1),
 
     // @Param: FLTMODE2
     // @CopyFieldsFrom: FLTMODE1
     // @DisplayName: FlightMode2
     // @Description: Flight mode for switch position 2 (1231 to 1360)
-    GSCALAR(flight_mode2,           "FLTMODE2",       FLIGHT_MODE_2),
+    GARRAY(flight_modes, 1,         "FLTMODE2",       FLIGHT_MODE_2),
 
     // @Param: FLTMODE3
     // @CopyFieldsFrom: FLTMODE1
     // @DisplayName: FlightMode3
     // @Description: Flight mode for switch position 3 (1361 to 1490)
-    GSCALAR(flight_mode3,           "FLTMODE3",       FLIGHT_MODE_3),
+    GARRAY(flight_modes, 2,         "FLTMODE3",       FLIGHT_MODE_3),
 
     // @Param: FLTMODE4
     // @CopyFieldsFrom: FLTMODE1
     // @DisplayName: FlightMode4
     // @Description: Flight mode for switch position 4 (1491 to 1620)
-    GSCALAR(flight_mode4,           "FLTMODE4",       FLIGHT_MODE_4),
+    GARRAY(flight_modes, 3,         "FLTMODE4",       FLIGHT_MODE_4),
 
     // @Param: FLTMODE5
     // @CopyFieldsFrom: FLTMODE1
     // @DisplayName: FlightMode5
     // @Description: Flight mode for switch position 5 (1621 to 1749)
-    GSCALAR(flight_mode5,           "FLTMODE5",       FLIGHT_MODE_5),
+    GARRAY(flight_modes, 4,         "FLTMODE5",       FLIGHT_MODE_5),
 
     // @Param: FLTMODE6
     // @CopyFieldsFrom: FLTMODE1
     // @DisplayName: FlightMode6
     // @Description: Flight mode for switch position 6 (1750 to 2049)
-    GSCALAR(flight_mode6,           "FLTMODE6",       FLIGHT_MODE_6),
+    GARRAY(flight_modes, 5,         "FLTMODE6",       FLIGHT_MODE_6),
 
     // @Param: INITIAL_MODE
     // @DisplayName: Initial flight mode
@@ -636,7 +636,7 @@ const AP_Param::Info Plane::var_info[] = {
     // @DisplayName: speed used for speed scaling calculations
     // @Description: Airspeed in m/s to use when calculating surface speed scaling. Note that changing this value will affect all PID values
     // @Units: m/s
-    // @Range: 0 50
+    // @Range: 0.1 50
     // @Increment: 0.1
     // @User: Advanced
     GSCALAR(scaling_speed,        "SCALING_SPEED",    SCALING_SPEED),
@@ -727,7 +727,7 @@ const AP_Param::Info Plane::var_info[] = {
     // @DisplayName: Crash Deceleration Threshold
     // @Description: X-Axis deceleration threshold to notify the crash detector that there was a possible impact which helps disarm the motor quickly after a crash. This value should be much higher than normal negative x-axis forces during normal flight, check flight log files to determine the average IMU.x values for your aircraft and motor type. Higher value means less sensitive (triggers on higher impact). For electric planes that don't vibrate much during fight a value of 25 is good (that's about 2.5G). For petrol/nitro planes you'll want a higher value. Set to 0 to disable the collision detector.
     // @Units: m/s/s
-    // @Range: 10 127
+    // @Range: 0 127
     // @Increment: 1
     // @User: Advanced
     GSCALAR(crash_accel_threshold,          "CRASH_ACC_THRESH",   0),
@@ -922,13 +922,13 @@ const AP_Param::Info Plane::var_info[] = {
 #if HAL_NAVEKF2_AVAILABLE
     // @Group: EK2_
     // @Path: ../libraries/AP_NavEKF2/AP_NavEKF2.cpp
-    GOBJECTN(ahrs.EKF2, NavEKF2, "EK2_", NavEKF2),
+    GOBJECTN(ahrs.ekf2.EKF2, NavEKF2, "EK2_", NavEKF2),
 #endif
 
 #if HAL_NAVEKF3_AVAILABLE
     // @Group: EK3_
     // @Path: ../libraries/AP_NavEKF3/AP_NavEKF3.cpp
-    GOBJECTN(ahrs.EKF3, NavEKF3, "EK3_", NavEKF3),
+    GOBJECTN(ahrs.ekf3.EKF3, NavEKF3, "EK3_", NavEKF3),
 #endif
 
 #if AP_RSSI_ENABLED
@@ -1477,6 +1477,9 @@ void Plane::load_parameters(void)
 #endif
 
     g.use_reverse_thrust.convert_parameter_width(AP_PARAM_INT16);
+
+    // PARAMETER_CONVERSION - Added: Jun-2026 for FBWB_CLIMB_RATE width change
+    g.flybywire_climb_rate.convert_parameter_width(AP_PARAM_INT8);
 
 #if AP_AIRSPEED_ENABLED
     // PARAMETER_CONVERSION - Added: Jan-2022

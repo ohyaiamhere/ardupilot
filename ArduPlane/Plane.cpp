@@ -107,7 +107,7 @@ const AP_Scheduler::Task Plane::scheduler_tasks[] = {
 #endif // HAL_MOUNT_ENABLED
 #if AP_CAMERA_ENABLED
     SCHED_TASK_CLASS(AP_Camera, &plane.camera, update,      50, 100, 108),
-#endif // CAMERA == ENABLED
+#endif // AP_CAMERA_ENABLED
 #if HAL_LOGGING_ENABLED
     SCHED_TASK_CLASS(AP_Scheduler, &plane.scheduler, update_logging,         0.2,    100, 111),
 #endif
@@ -125,7 +125,7 @@ const AP_Scheduler::Task Plane::scheduler_tasks[] = {
 #endif // AP_TERRAIN_AVAILABLE
     SCHED_TASK(update_is_flying_5Hz,    5,    100, 135),
 #if HAL_LOGGING_ENABLED
-    SCHED_TASK_CLASS(AP_Logger,         &plane.logger, periodic_tasks, 50, 400, 138),
+    SCHED_TASK_CLASS(AP_Logger,         &plane.logger, periodic_tasks, 400, 300, 138),
 #endif
     SCHED_TASK_CLASS(AP_InertialSensor, &plane.ins,    periodic,       50,  50, 141),
 #if HAL_ADSB_ENABLED || AP_ADSB_AVOIDANCE_ENABLED
@@ -195,10 +195,10 @@ void Plane::ahrs_update()
     steer_state.locked_course_err += ahrs.get_yaw_rate_earth() * G_Dt;
     steer_state.locked_course_err = wrap_PI(steer_state.locked_course_err);
 
-#if HAL_QUADPLANE_ENABLED
-    // check if we have had a yaw reset from the EKF
-    quadplane.check_yaw_reset();
+    // Check if there has been a change in attitude estimate which the attitude controllers should be told about
+    check_ahrs_reset();
 
+#if HAL_QUADPLANE_ENABLED
     // update inertial_nav for quadplane
     quadplane.inertial_nav.update();
     if (quadplane.available()) {  
@@ -268,13 +268,20 @@ void Plane::update_compass(void)
  */
 void Plane::update_logging10(void)
 {
-    bool log_faster = (should_log(MASK_LOG_ATTITUDE_FULLRATE) || should_log(MASK_LOG_ATTITUDE_FAST));
-    if (should_log(MASK_LOG_ATTITUDE_MED) && !log_faster) {
+    const bool attitude_med = should_log(MASK_LOG_ATTITUDE_MED);
+    const bool attitude_faster = should_log(MASK_LOG_ATTITUDE_FULLRATE) || should_log(MASK_LOG_ATTITUDE_FAST);
+
+    // Log attitude only if no faster logging is selected
+    if (attitude_med && !attitude_faster) {
         Log_Write_Attitude();
-        ahrs.Write_AOA_SSA();
-    } else if (log_faster) {
+        AP::ahrs().Log_Write();
+    }
+
+    // If any attitude logging is enabled log AOA and SSA
+    if (attitude_med || attitude_faster) {
         ahrs.Write_AOA_SSA();
     }
+
 #if HAL_MOUNT_ENABLED
     if (should_log(MASK_LOG_CAMERA)) {
         camera_mount.write_log();
@@ -295,11 +302,17 @@ void Plane::update_logging10(void)
  */
 void Plane::update_logging25(void)
 {
-    // MASK_LOG_ATTITUDE_FULLRATE logs at 400Hz, MASK_LOG_ATTITUDE_FAST at 25Hz, MASK_LOG_ATTIUDE_MED logs at 10Hz
-    // highest rate selected wins
-    bool log_faster = should_log(MASK_LOG_ATTITUDE_FULLRATE);
-    if (should_log(MASK_LOG_ATTITUDE_FAST) && !log_faster) {
+    const bool attitude_fast = should_log(MASK_LOG_ATTITUDE_FAST);
+    const bool attitude_full_rate = should_log(MASK_LOG_ATTITUDE_FULLRATE);
+
+    // Log at fast rate if fast logging is the fastest enabled
+    if (attitude_fast && !attitude_full_rate) {
         Log_Write_Attitude();
+    }
+
+    // Log AHRS at fast rate if either fast or full rate is selected
+    if (attitude_fast || attitude_full_rate) {
+        AP::ahrs().Log_Write();
     }
 
     if (should_log(MASK_LOG_CTUN)) {
@@ -481,9 +494,6 @@ void Plane::update_GPS_10Hz(void)
                 ground_start_count = 0;
             }
         }
-
-        // update wind estimate
-        ahrs.estimate_wind();
     } else if (gps.status() < AP_GPS_FixType::FIX_3D && ground_start_count != 0) {
         // lost 3D fix, start again
         ground_start_count = 5;

@@ -59,7 +59,12 @@ NavEKF3_core::MagCal NavEKF3_core::effective_magCal(void) const
 // avoid unnecessary operations
 void NavEKF3_core::setWindMagStateLearningMode()
 {
-    const bool canEstimateWind = ((finalInflightYawInit && dragFusionEnabled) || assume_zero_sideslip()) &&
+    const bool recentGpsYawFusion = (yaw_source_last == AP_NavEKF_Source::SourceYaw::GPS ||
+                                     yaw_source_last == AP_NavEKF_Source::SourceYaw::GPS_COMPASS_FALLBACK) &&
+                                    last_gps_yaw_fuse_ms != 0 &&
+                                    imuSampleTime_ms - last_gps_yaw_fuse_ms < 5000;
+    const bool yawInitialised = recentGpsYawFusion || finalInflightYawInit;
+    const bool canEstimateWind = ((yawInitialised && dragFusionEnabled) || assume_zero_sideslip()) &&
                                  !onGround &&
                                  PV_AidingMode != AID_NONE;
     if (!inhibitWindStates && !canEstimateWind) {
@@ -89,16 +94,14 @@ void NavEKF3_core::setWindMagStateLearningMode()
             }
 
             // set the wind state variances to the measurement uncertainty
-            zeroCols(P, 22, 23);
-            zeroRows(P, 22, 23);
+            zeroStatesVarCov(22, 23);
             P[22][22] = P[23][23] = trueAirspeedVariance;
 
             windStatesAligned = true;
 
         } else {
             // set the variances using a typical max wind speed for small UAV operation
-            zeroCols(P, 22, 23);
-            zeroRows(P, 22, 23);
+            zeroStatesVarCov(22, 23);
             for (uint8_t index=22; index<=23; index++) {
                 P[index][index] = sq(WIND_VEL_VARIANCE_MAX);
             }
@@ -113,11 +116,13 @@ void NavEKF3_core::setWindMagStateLearningMode()
         ((effectiveMagCal == MagCal::WHEN_FLYING) && inFlight) || // when flying
         ((effectiveMagCal == MagCal::WHEN_MANOEUVRING) && manoeuvring)  || // when manoeuvring
         ((effectiveMagCal == MagCal::AFTER_FIRST_CLIMB) && finalInflightYawInit && finalInflightMagInit) || // when initial in-air yaw and mag field reset is complete
-        (effectiveMagCal == MagCal::ALWAYS); // all the time
+        (effectiveMagCal == MagCal::ALWAYS) || // all the time
+        ((effectiveMagCal == MagCal::GROUND_AND_INFLIGHT) && (!inFlight || (finalInflightYawInit && finalInflightMagInit))); // on ground and after initial in-air yaw and mag field reset
 
     // Deny mag calibration request if we aren't using the compass, it has been inhibited by the user,
     // we do not have an absolute position reference or are on the ground (unless explicitly requested by the user)
-    bool magCalDenied = !use_compass() || (effectiveMagCal == MagCal::NEVER) || (onGround && effectiveMagCal != MagCal::ALWAYS);
+    bool magCalDenied = !use_compass() || (effectiveMagCal == MagCal::NEVER) ||
+        (onGround && effectiveMagCal != MagCal::ALWAYS && effectiveMagCal != MagCal::GROUND_AND_INFLIGHT);
 
     // Inhibit the magnetic field calibration if not requested or denied
     bool setMagInhibit = !magCalRequested || magCalDenied;
@@ -274,8 +279,7 @@ void NavEKF3_core::setAidingMode()
         for (uint8_t row=0; row<6; row++) {
             oldBiasVariance[row] = P[row+10][row+10];
         }
-        zeroCols(P,10,15);
-        zeroRows(P,10,15);
+        zeroStatesVarCov(10, 15);
         for (uint8_t row=0; row<6; row++) {
             P[row+10][row+10] = oldBiasVariance[row];
         }
@@ -679,20 +683,6 @@ bool NavEKF3_core::assume_zero_sideslip(void) const
     return dal.get_fly_forward() && dal.get_vehicle_class() != AP_DAL::VehicleClass::GROUND;
 }
 
-// sets the local NED origin using a LLH location (latitude, longitude, height)
-// returns false if the origin is already set
-bool NavEKF3_core::setOriginLLH(const Location &loc)
-{
-    // reject external origin setting until the filter has finished
-    // bootstrap initialisation.  InitialiseVariables() resets
-    // validOrigin, so an origin set before that point is lost.
-    // Callers (e.g. AHRS use_recorded_origin_maybe) will retry.
-    if (!statesInitialised) {
-        return false;
-    }
-    return setOrigin(loc);
-}
-
 // populates the Earth magnetic field table using the given location
 void NavEKF3_core::setEarthFieldFromLocation(const Location &loc)
 {
@@ -709,7 +699,7 @@ void NavEKF3_core::setEarthFieldFromLocation(const Location &loc)
 
 // sets the local NED origin using a LLH location (latitude, longitude, height)
 // returns false is the origin has already been set
-bool NavEKF3_core::setOrigin(const Location &loc)
+bool NavEKF3_core::setOriginLLH(const Location &loc)
 {
     // if the origin is valid reject setting a new origin
     if (validOrigin) {

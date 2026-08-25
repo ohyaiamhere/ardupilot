@@ -213,10 +213,6 @@ private:
     int32_t roll_limit_cd;
     float pitch_limit_min;
 
-    // flight modes convenience array
-    AP_Int8 *flight_modes = &g.flight_mode1;
-    static constexpr uint8_t num_flight_modes = 6;
-
 #if AP_RANGEFINDER_ENABLED
     AP_FixedWing::Rangefinder_State rangefinder_state;
 
@@ -939,6 +935,13 @@ private:
     int16_t calc_nav_yaw_course(void);
     int16_t calc_nav_yaw_ground(void);
 
+    // Check if there has been a change in attitude estimate which the attitude controllers should be told about
+    void check_ahrs_reset();
+    struct {
+        uint16_t ahrs_yaw_reset_count;
+        uint16_t attitude_reset_count;
+    } ahrs_check;
+
 #if HAL_LOGGING_ENABLED
 
     // methods for AP_Vehicle:
@@ -1171,6 +1174,7 @@ private:
     float apply_throttle_limits(float throttle_in);
     void set_throttle(void);
     void set_takeoff_expected(void);
+    float get_auto_flap_speed() const;
     void set_servos_flaps(void);
     void dspoiler_update(void);
     void airbrake_update(void);
